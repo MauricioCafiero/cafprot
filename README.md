@@ -21,19 +21,21 @@ import cafprot
 
 cafprot.normalize_smiles("CC(=O)Oc1ccccc1C(=O)O")     # -> 'CC(=O)Oc1ccccc1C(=O)[O-]'
 cafprot.normalize_smiles("CCN")                        # -> 'CC[NH3+]'
+cafprot.protonation_states("Oc1ccccc1")                # -> ['Oc1ccccc1', '[O-]c1ccccc1']
 cafprot.protonate_receptor("receptor.pdb")             # -> 'receptor_protonated.pdb'
 cafprot.propka_available()                             # -> True / False
 ```
 
 | | Default | Notes |
 |---|---|---|
-| `normalize_smiles(smiles, ph, canonicalize_tautomer=False)` | `ph=PH_LIGAND` = **7.4** | Dimorphite-DL; blood plasma |
+| `normalize_smiles(smiles, ph, canonicalize_tautomer=False)` | `ph=PH_LIGAND` = **7.4** | Dimorphite-DL; blood plasma; one state |
+| `protonation_states(smiles, ph, precision=1.0)` | `ph=PH_LIGAND` = **7.4** | every plausible state; see the disclaimer |
 | `protonate_receptor(pdb_path, ph, overwrite=False)` | `ph=PH_RECEPTOR` = **7.0** | pdb2pqr + PROPKA; pdb2pqr's own default |
 
 The two pH defaults live as constants at the top of `cafprot.py`, so the
 family-wide convention is one edit rather than a decision re-made in every CLI.
 
-Both functions **fall back to returning their input unchanged, with a warning,
+All three **fall back to returning their input unchanged, with a warning,
 rather than raising** — one bad molecule should never abort a batch. Receptor
 output is cached as `<stem>_protonated.pdb` beside the input and reused unless
 `overwrite=True`.
@@ -57,22 +59,42 @@ and with `protonate_receptor` on the ASP/GLU test fragment: 25 hydrogens at
 pH 0–2, 24 from pH 4 up — the carboxylates titrating right at pKa ≈ 4. It is
 flat above 4 only because that fragment has nothing else ionisable.
 
-**Disclaimer: the pH is honoured mechanically, but the chemistry is only as
-good as the underlying pKa rules, and Dimorphite-DL's are aggressive.** From
-the table above:
+**Disclaimer: `normalize_smiles` returns ONE state, and buying that single
+answer costs you the uncertainty Dimorphite-DL was built to express.**
 
-- **imidazole** is deprotonated to `[n-]` at pH 7.4, but that N–H has pKa ≈ 14.5
-  — clearly wrong
-- **phenol** ionises at 7.4 despite pKa ≈ 10 (pinned in the test suite)
-- **ethylamine** is neutral by pH 9, though pKa 10.7 implies it is still ~98%
-  protonated there
+Dimorphite-DL associates each of its 38 ionizable moieties with a pKa *range*,
+`[µ − nσ, µ + nσ]`, not a point value — deliberately, because it treats each
+ionizable site independently and the ranges are how it absorbs that
+approximation. When the range overlaps the requested pH it emits *both* the
+protonated and deprotonated forms, meaning "either is plausible."
 
-The acid side tracks textbook values well — aspirin flips between pH 2 and 4,
-exactly where pKa 3.5 says it should. But for a ligand carrying a phenol, an
-imidazole, or another weak acid, **check the returned state rather than
-trusting it**. These are Dimorphite-DL's parameterisations, not something
-`cafprot` imposes; the receptor side goes through PROPKA, which titrated the
-carboxylates correctly.
+To return a single string, `normalize_smiles` asks for `precision=0` (n = 0),
+which collapses each range to its bare mean. For chemically heterogeneous
+classes that mean is a poor estimate for any specific molecule:
+
+| Molecule | Class | µ used | true pKa | result at 7.4 |
+|---|---|---|---|---|
+| phenol | `Phenol` = `[c,n,o:1]-[O:2]-[H]` | 7.07 (σ 3.28) | ≈ 10 | ionised |
+| imidazole | `[n:1]-[H]` | 7.17 (σ 2.95) | ≈ 14.5 | `[n-]` |
+| ethylamine | `[C:1]-[NX3+0:2]` | 8.16 (σ 2.52) | 10.7 | neutral by pH 9 |
+
+Those SMARTS are broad — `Phenol` also matches N–OH and O–OH and electron-poor
+phenols near pKa 7; the aromatic N–H class spans tetrazole (≈ 4.9) to pyrrole
+(≈ 17) — so σ of 2.5–3.3 log units is the library flagging a heterogeneous
+class, and `precision=0` discards that flag. **This is `cafprot`'s choice, not
+a defect in Dimorphite-DL.**
+
+Well-defined groups are fine: aspirin flips between pH 2 and 4, exactly where
+pKa 3.5 predicts. For a ligand carrying a phenol, an azole N–H or another
+group in a broad class, call `protonation_states()` to see every form the
+library considers plausible before trusting the single answer:
+
+```python
+cafprot.protonation_states("Oc1ccccc1", ph=7.4)   # ['Oc1ccccc1', '[O-]c1ccccc1']
+```
+
+The receptor side is unaffected — it goes through PROPKA, which titrated the
+test carboxylates correctly at pKa ≈ 4.
 
 ## Setup
 
@@ -123,18 +145,19 @@ returning a file that quietly pretends otherwise.
 python tests/test_cafprot.py     # or: pytest tests/
 ```
 
-11 tests, no pytest required, no network, and no dependency on any other repo —
+12 tests, no pytest required, no network, and no dependency on any other repo —
 the only input is the 4-residue fragment in `tests/mini_peptide.pdb`. Verified
-11/11 on both 3.11.15 and 3.14.5.
+12/12 on both 3.11.15 and 3.14.5.
 
 `test_receptor_ph_is_actually_applied` asserts that pH 1 and pH 13 give
 different protonation, so an interpreter where PROPKA silently does nothing
 fails the suite rather than passing it.
 
 One test pins a behaviour rather than endorsing it: phenol (pKa ≈ 10) comes back
-as `[O-]c1ccccc1` at pH 7.4, because Dimorphite-DL's phenol rule is aggressive.
-That is the library's call, not this module's; it is pinned so a version bump
-that changes it gets noticed.
+as `[O-]c1ccccc1` at pH 7.4, because the single-answer API collapses the Phenol
+class to its 7.07 mean. Pinned so a version bump that shifts it gets noticed,
+and paired with a test asserting `protonation_states()` still surfaces both
+forms.
 
 ## License
 

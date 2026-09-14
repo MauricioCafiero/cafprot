@@ -99,6 +99,29 @@ def _propka_native():
         return False
 
 
+def protonation_states(smiles, ph=PH_LIGAND, precision=1.0):
+    """Every protonation state Dimorphite-DL considers plausible at `ph`.
+
+    normalize_smiles() asks for one answer (precision=0, i.e. each moiety's
+    pKa range collapsed to its mean). This exposes what that discards: the
+    library associates each ionizable group with a range [mu - n*sigma,
+    mu + n*sigma] and returns BOTH forms when that range straddles the pH,
+    which is its way of saying "either is plausible here".
+
+    Worth calling for any group in a chemically broad class -- the Phenol
+    SMARTS also matches N-OH and O-OH, and the aromatic N-H class spans
+    tetrazole to pyrrole -- where the class mean is a poor stand-in for the
+    specific molecule. Returns [smiles] unchanged if Dimorphite-DL fails.
+    """
+    try:
+        from dimorphite_dl import protonate_smiles
+        states = protonate_smiles(smiles, ph_min=ph, ph_max=ph, precision=precision)
+    except Exception as exc:
+        warnings.warn(f"protonation failed for {smiles!r} ({exc}); using input unchanged")
+        return [smiles]
+    return list(states) if states else [smiles]
+
+
 def propka_available():
     """Whether a requested pH will actually mean anything here -- i.e. whether
     PROPKA can run, natively or via the 3.14 shim.

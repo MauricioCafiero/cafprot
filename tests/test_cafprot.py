@@ -52,12 +52,24 @@ def test_tautomer_flag_is_off_by_default():
     assert cafprot.normalize_smiles(enol, canonicalize_tautomer=True) != enol
 
 
-def test_phenol_is_dimorphites_call_not_ours():
+def test_phenol_single_state_follows_the_class_mean():
     """Regression pin, NOT an endorsement: phenol (pKa ~10) comes back ionised
-    at 7.4 because Dimorphite-DL's phenol rule is aggressive. Pinned so a
-    version bump that changes it is noticed rather than silently absorbed.
+    at 7.4 because normalize_smiles asks for precision=0, collapsing the
+    Phenol class to its mean of 7.07 -- that SMARTS also covers N-OH, O-OH and
+    electron-poor phenols. Pinned so a version bump that shifts it is noticed.
     """
     assert cafprot.normalize_smiles("Oc1ccccc1") == "[O-]c1ccccc1"
+
+
+def test_protonation_states_exposes_the_discarded_uncertainty():
+    """At the library's own default precision, phenol is reported as BOTH
+    forms -- the ambiguity the single-answer API throws away.
+    """
+    states = cafprot.protonation_states("Oc1ccccc1", ph=7.4)
+    assert len(states) > 1, f"expected the ambiguity to surface, got {states}"
+    assert cafprot.normalize_smiles("Oc1ccccc1") in states
+    # a well-defined group stays unambiguous even at default precision
+    assert len(cafprot.protonation_states("CC(=O)Oc1ccccc1C(=O)O", ph=7.4)) == 1
 
 
 def test_receptor_protonation_writes_and_caches():
