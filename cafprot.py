@@ -15,12 +15,13 @@ the code that needs it, or put this repo on sys.path.
 Both functions fall back to returning their input unchanged, with a warning,
 rather than raising: one bad molecule should never abort a batch.
 
-PYTHON 3.14 CAVEAT (measured, not assumed): PROPKA 3.5.1 crashes on 3.14 --
-it reads instance __annotations__ at runtime, which PEP 649 changed. pdb2pqr
-itself still runs, and will even accept --with-ph while silently doing no
-pKa prediction at all, so a 3.14 run can look successful while ignoring the
-pH entirely. protonate_receptor() detects this and says so loudly. For real
-pH-aware receptor prep, use Python 3.11.
+PYTHON 3.14: PROPKA 3.5.1 (the newest release) crashes there -- it reads
+instance __annotations__ at runtime, which PEP 649 made lazy. pdb2pqr itself
+still runs, and will even accept --with-ph while doing no pKa prediction at
+all, so a 3.14 run can look successful while ignoring the pH entirely. A
+shim (see _PROPKA_SHIM) restores the annotations inside the pdb2pqr
+subprocess, so pH-aware receptor protonation works on 3.14 too, producing
+output byte-identical to 3.11's native PROPKA.
 """
 import os
 import shutil
@@ -67,13 +68,46 @@ def normalize_smiles(smiles, ph=PH_LIGAND, canonicalize_tautomer=False):
     return Chem.MolToSmiles(mol)
 
 
-def propka_available():
-    """Whether PROPKA can actually run here -- i.e. whether a requested pH will
-    mean anything. False on Python 3.14; see the module docstring.
-    """
+# PROPKA 3.5.1 (the newest release there is) reads `self.__annotations__` to
+# type its parameter file. PEP 649 made annotations lazy in 3.14, so instances
+# no longer expose that attribute and PROPKA dies on import of its parameters.
+# The annotations still exist -- annotationlib can materialise them -- but
+# reattaching them to the CLASS doesn't help, because 3.14 redirects that
+# assignment into __annotations_cache__ where instance lookup won't find it.
+# Putting the dict in each instance's __dict__ does work. Applied inside the
+# pdb2pqr subprocess, since that is where PROPKA actually runs.
+_PROPKA_SHIM = """
+import annotationlib, propka.parameters as pp
+_ann = dict(annotationlib.get_annotations(pp.Parameters))
+_orig_init = pp.Parameters.__init__
+def _init(self, *args, **kwargs):
+    _orig_init(self, *args, **kwargs)
+    self.__dict__['__annotations__'] = _ann
+pp.Parameters.__init__ = _init
+from pdb2pqr.main import main
+main()
+"""
+
+
+def _propka_native():
+    """True if PROPKA works as shipped, with no shim (Python <= 3.13)."""
     try:
         import propka.parameters
         propka.parameters.Parameters().__annotations__
+        return True
+    except Exception:
+        return False
+
+
+def propka_available():
+    """Whether a requested pH will actually mean anything here -- i.e. whether
+    PROPKA can run, natively or via the 3.14 shim.
+    """
+    if _propka_native():
+        return True
+    try:
+        import annotationlib  # 3.14+, the interpreter the shim is for
+        import propka.parameters  # noqa: F401
         return True
     except Exception:
         return False
@@ -98,23 +132,31 @@ def protonate_receptor(pdb_path, ph=PH_RECEPTOR, overwrite=False):
     # Console scripts live beside the interpreter, which matters when a venv's
     # python is invoked directly (venv/bin/python ...) without activation --
     # then the venv's bin/ is not on PATH and a plain which() finds nothing.
-    exe = None
-    for path in (None, os.path.dirname(sys.executable)):
-        exe = shutil.which("pdb2pqr", path=path) or shutil.which("pdb2pqr30", path=path)
-        if exe:
-            break
-    if exe is None:
-        warnings.warn("pdb2pqr not found on PATH; using the unprotonated input")
-        return pdb_path
+    if _propka_native():
+        # Console scripts live beside the interpreter, which matters when a
+        # venv's python is invoked directly (venv/bin/python ...) without
+        # activation -- then the venv's bin/ is not on PATH and a plain
+        # which() finds nothing.
+        launcher = None
+        for path in (None, os.path.dirname(sys.executable)):
+            launcher = shutil.which("pdb2pqr", path=path) or shutil.which("pdb2pqr30", path=path)
+            if launcher:
+                break
+        if launcher is None:
+            warnings.warn("pdb2pqr not found on PATH; using the unprotonated input")
+            return pdb_path
+        cmd = [launcher]
+    else:
+        # Same pdb2pqr entry point, reached through the PEP 649 shim above.
+        cmd = [sys.executable, "-c", _PROPKA_SHIM]
 
-    cmd = [exe, "--ff=AMBER", f"--pdb-output={out_pdb}"]
+    cmd += ["--ff=AMBER", f"--pdb-output={out_pdb}"]
     if propka_available():
         cmd += [f"--with-ph={ph}", "--titration-state-method=propka"]
     else:
         warnings.warn(
-            f"PROPKA unavailable under this interpreter, so pH {ph} was NOT applied to "
-            f"{pdb_path}; hydrogens were added without pKa prediction. Use Python 3.11 "
-            f"for pH-aware receptor protonation."
+            f"PROPKA cannot run here, so pH {ph} was NOT applied to {pdb_path}; hydrogens "
+            f"were added without pKa prediction."
         )
     cmd += [pdb_path, f"{os.path.splitext(pdb_path)[0]}_protonated.pqr"]
 

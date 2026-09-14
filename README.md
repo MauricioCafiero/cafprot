@@ -46,30 +46,40 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Python 3.14 caveat (measured, not assumed)
+## Python 3.14 and PROPKA (handled automatically)
 
-**PROPKA 3.5.1 crashes on Python 3.14.** It reads instance `__annotations__` at
-runtime, which PEP 649 changed:
+**PROPKA 3.5.1 — the newest release that exists — crashes on Python 3.14.** It
+reads instance `__annotations__` at runtime to type its parameter file, and
+PEP 649 made annotations lazy:
 
 ```
 AttributeError: 'Parameters' object has no attribute '__annotations__'.
 Did you mean: '__annotate_func__'?
 ```
 
-The trap is that pdb2pqr still *succeeds* on 3.14 — it accepts `--with-ph` and
-exits 0 while doing no pKa prediction at all, so a run can look fine while
-ignoring the pH entirely. `protonate_receptor()` detects this via
-`propka_available()` and warns explicitly that the pH was not applied, instead
-of returning a file that quietly pretends otherwise.
+The trap is that pdb2pqr still *succeeds* without PROPKA — it accepts
+`--with-ph`, exits 0, and does no pKa prediction at all, so a 3.14 run can look
+perfectly fine while ignoring the pH entirely.
 
-**Use Python 3.11 for pH-aware receptor work.** The ligand side is unaffected
-and works on both.
+`cafprot` fixes this rather than documenting around it. The annotations still
+exist and `annotationlib` can materialise them; reattaching them to the *class*
+doesn't help, because 3.14 redirects that assignment into
+`__annotations_cache__` where instance lookup won't find it — but putting the
+dict into each instance's `__dict__` does work. That shim is applied inside the
+pdb2pqr subprocess, where PROPKA actually runs.
+
+**Result: pH-aware receptor protonation works on both interpreters**, and on
+3.14 the output is byte-identical to 3.11's native PROPKA at pH 1, 7 and 13.
 
 | | 3.11.15 | 3.14.5 |
 |---|---|---|
 | `normalize_smiles` | works | works |
 | `protonate_receptor`, hydrogens added | works | works |
-| `protonate_receptor`, pH applied | **yes** | **no** (warns) |
+| `protonate_receptor`, **pH applied** | yes (native) | yes (via shim) |
+
+If PROPKA ever becomes genuinely unrunnable, `propka_available()` returns False
+and `protonate_receptor()` warns loudly that the pH was not applied, instead of
+returning a file that quietly pretends otherwise.
 
 ## Tests
 
@@ -77,9 +87,13 @@ and works on both.
 python tests/test_cafprot.py     # or: pytest tests/
 ```
 
-10 tests, no pytest required, no network, and no dependency on any other repo —
+11 tests, no pytest required, no network, and no dependency on any other repo —
 the only input is the 4-residue fragment in `tests/mini_peptide.pdb`. Verified
-10/10 on both 3.11.15 and 3.14.5.
+11/11 on both 3.11.15 and 3.14.5.
+
+`test_receptor_ph_is_actually_applied` asserts that pH 1 and pH 13 give
+different protonation, so an interpreter where PROPKA silently does nothing
+fails the suite rather than passing it.
 
 One test pins a behaviour rather than endorsing it: phenol (pKa ≈ 10) comes back
 as `[O-]c1ccccc1` at pH 7.4, because Dimorphite-DL's phenol rule is aggressive.

@@ -93,7 +93,34 @@ def test_propka_availability_is_reported():
     """propka_available() must agree with whether a pH can actually be applied."""
     available = cafprot.propka_available()
     assert isinstance(available, bool)
-    print(f"    (PROPKA usable here: {available}; Python {sys.version.split()[0]})")
+    route = "native" if cafprot._propka_native() else "via 3.14 shim"
+    print(f"    (PROPKA usable here: {available}, {route}; Python {sys.version.split()[0]})")
+
+
+def test_receptor_ph_is_actually_applied():
+    """The entire point of the receptor half: pH must change the answer.
+
+    This fails on any interpreter where PROPKA cannot run -- which is exactly
+    what the PEP 649 shim in cafprot exists to prevent, and what a plain
+    pdb2pqr call hides by exiting 0 while ignoring --with-ph.
+    """
+    assert cafprot.propka_available(), "PROPKA cannot run here, so pH would be silently ignored"
+    import shutil
+    import tempfile
+
+    work_dir = tempfile.mkdtemp()
+    try:
+        hydrogens = {}
+        for ph in (1.0, 13.0):
+            work = os.path.join(work_dir, f"ph{ph}.pdb")
+            shutil.copy(MINI_PDB, work)
+            out = cafprot.protonate_receptor(work, ph=ph, overwrite=True)
+            hydrogens[ph] = sum(1 for l in open(out)
+                                if l.startswith("ATOM") and l[76:78].strip() == "H")
+        assert hydrogens[1.0] != hydrogens[13.0], (
+            f"pH had no effect ({hydrogens}) -- the carboxylates should titrate")
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
