@@ -83,10 +83,16 @@ def test_receptor_protonation_writes_and_caches():
 def test_missing_receptor_falls_back_to_input():
     """A nonexistent PDB warns and returns the input path, never raises."""
     missing = os.path.join(HERE, "does_not_exist.pdb")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        assert cafprot.protonate_receptor(missing) == missing
-        assert caught, "expected a warning when pdb2pqr fails"
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert cafprot.protonate_receptor(missing) == missing
+            assert caught, "expected a warning when pdb2pqr fails"
+    finally:
+        # pdb2pqr writes its log even for an input it cannot read
+        stray = os.path.splitext(missing)[0] + "_protonated.log"
+        if os.path.exists(stray):
+            os.remove(stray)
 
 
 def test_propka_availability_is_reported():
