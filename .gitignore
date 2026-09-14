@@ -5,3 +5,4 @@ __pycache__/
 *_protonated.pqr
 .DS_Store
 *_protonated.log
+protonation_state_integration_plan.md
