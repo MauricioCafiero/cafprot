@@ -38,6 +38,42 @@ rather than raising** — one bad molecule should never abort a batch. Receptor
 output is cached as `<stem>_protonated.pdb` beside the input and reused unless
 `overwrite=True`.
 
+## pH range, and how far to trust it
+
+**Any pH from 0 to 14 works** — the physiological defaults are only defaults.
+Values outside that range are rejected by pdb2pqr, and `protonate_receptor()`
+then warns and returns the input unchanged rather than crashing.
+
+Measured with `normalize_smiles`:
+
+| pH | aspirin (COOH, pKa ≈ 3.5) | ethylamine (pKa ≈ 10.7) | imidazole |
+|---|---|---|---|
+| 0–2 | neutral | `[NH3+]` | `[nH+]` |
+| 4–6 | `[O-]` | `[NH3+]` | `[nH+]` → neutral |
+| 7.4 | `[O-]` | `[NH3+]` | `[n-]` |
+| 9–14 | `[O-]` | neutral | `[n-]` |
+
+and with `protonate_receptor` on the ASP/GLU test fragment: 25 hydrogens at
+pH 0–2, 24 from pH 4 up — the carboxylates titrating right at pKa ≈ 4. It is
+flat above 4 only because that fragment has nothing else ionisable.
+
+**Disclaimer: the pH is honoured mechanically, but the chemistry is only as
+good as the underlying pKa rules, and Dimorphite-DL's are aggressive.** From
+the table above:
+
+- **imidazole** is deprotonated to `[n-]` at pH 7.4, but that N–H has pKa ≈ 14.5
+  — clearly wrong
+- **phenol** ionises at 7.4 despite pKa ≈ 10 (pinned in the test suite)
+- **ethylamine** is neutral by pH 9, though pKa 10.7 implies it is still ~98%
+  protonated there
+
+The acid side tracks textbook values well — aspirin flips between pH 2 and 4,
+exactly where pKa 3.5 says it should. But for a ligand carrying a phenol, an
+imidazole, or another weak acid, **check the returned state rather than
+trusting it**. These are Dimorphite-DL's parameterisations, not something
+`cafprot` imposes; the receptor side goes through PROPKA, which titrated the
+carboxylates correctly.
+
 ## Setup
 
 ```sh
@@ -99,3 +135,7 @@ One test pins a behaviour rather than endorsing it: phenol (pKa ≈ 10) comes ba
 as `[O-]c1ccccc1` at pH 7.4, because Dimorphite-DL's phenol rule is aggressive.
 That is the library's call, not this module's; it is pinned so a version bump
 that changes it gets noticed.
+
+## License
+
+[MIT](LICENSE)
