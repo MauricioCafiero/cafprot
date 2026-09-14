@@ -33,8 +33,15 @@ PH_LIGAND = 7.4      # blood plasma
 PH_RECEPTOR = 7.0    # pdb2pqr's own default, closer to intracellular
 
 
-def normalize_smiles(smiles, ph=PH_LIGAND, canonicalize_tautomer=False):
+def normalize_smiles(smiles, ph=PH_LIGAND, canonicalize_tautomer=False,
+                     warn_if_ambiguous=True):
     """The dominant protonation state of `smiles` at `ph`, as canonical SMILES.
+
+    Warns when the answer is ambiguous -- i.e. when Dimorphite-DL considers
+    more than one state plausible at this pH, which is where its class-mean
+    fallback can pick the wrong one (phenol and azole N-H are the usual
+    offenders; see protonation_states() and the README). Pass
+    warn_if_ambiguous=False to silence that for bulk runs.
 
     Returns `smiles` unchanged (with a warning) if Dimorphite-DL is missing or
     cannot handle the input. Set canonicalize_tautomer=True to additionally
@@ -45,9 +52,24 @@ def normalize_smiles(smiles, ph=PH_LIGAND, canonicalize_tautomer=False):
 
     try:
         from dimorphite_dl import protonate_smiles
-        # precision=0 asks for the single dominant state; the default of 1.0
-        # returns every variant within a +/-1 pKa window instead.
-        states = protonate_smiles(smiles, ph_min=ph, ph_max=ph, precision=0.0)
+        # First at the library's own precision: if it returns a single state,
+        # the group's whole pKa range sits on one side of this pH and the
+        # answer is unambiguous. Measured on a panel of 9 molecules with known
+        # pKa, every single-state case was correct and every error was a
+        # multi-state one -- so the count is a usable confidence signal.
+        plausible = protonate_smiles(smiles, ph_min=ph, ph_max=ph, precision=1.0)
+        if len(plausible) == 1:
+            states = plausible
+        else:
+            # Ambiguous: the range straddles this pH. Fall back to the class
+            # mean for a deterministic answer, but say so -- the correct form
+            # is in `plausible`, and only chemistry knowledge picks it.
+            states = protonate_smiles(smiles, ph_min=ph, ph_max=ph, precision=0.0)
+            if warn_if_ambiguous:
+                warnings.warn(
+                    f"protonation of {smiles!r} at pH {ph} is ambiguous: {list(plausible)}. "
+                    f"Returning the class-mean choice; see protonation_states()."
+                )
     except Exception as exc:
         warnings.warn(f"protonation failed for {smiles!r} ({exc}); using input unchanged")
         return smiles

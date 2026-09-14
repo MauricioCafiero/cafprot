@@ -61,6 +61,24 @@ def test_phenol_single_state_follows_the_class_mean():
     assert cafprot.normalize_smiles("Oc1ccccc1") == "[O-]c1ccccc1"
 
 
+def test_ambiguous_input_warns_and_unambiguous_does_not():
+    """A molecule whose pKa range straddles the pH is flagged; a clear-cut one
+    is not. Phenol is ambiguous at 7.4, acetic acid is not.
+    """
+    for smiles, should_warn in [("Oc1ccccc1", True), ("CC(=O)O", False)]:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cafprot.normalize_smiles(smiles)
+            warned = any("ambiguous" in str(w.message) for w in caught)
+        assert warned is should_warn, f"{smiles}: expected warn={should_warn}"
+
+    # and it can be silenced for bulk runs
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        cafprot.normalize_smiles("Oc1ccccc1", warn_if_ambiguous=False)
+        assert not any("ambiguous" in str(w.message) for w in caught)
+
+
 def test_protonation_states_exposes_the_discarded_uncertainty():
     """At the library's own default precision, phenol is reported as BOTH
     forms -- the ambiguity the single-answer API throws away.
